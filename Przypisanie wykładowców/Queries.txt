@@ -1,0 +1,518 @@
+QUERY 1.
+Procedura wyświetla przydział dla wykładowcy na dany semestr.
+CREATE  PROCEDURE `pokaz_przydzial_dla_wykladowcy_na_semestr` (IN `wykladowca_id` INT, IN `semestr_id` INT)
+BEGIN
+	SELECT 
+		*
+	FROM
+		realizowany_przedmiot_view rpv
+	WHERE
+		rpv.wykladowca_id = wykladowca_id 
+	AND rpv.semestr_id = semestr_id
+	ORDER BY
+		 realizowany_kierunek_id;
+END
+
+//****************************************************************************************************************
+
+QUERY 2.
+Procedura wyświetla wykwalifikowanego prowadzącego dla danego przedmiotu.
+CREATE PROCEDURE `mozliwy_prowadzacy_dla_przedmiotu`(IN `przedmiot_id` INT)
+BEGIN
+	SELECT 
+		pw.*,
+		w.*
+	FROM
+		przedmiot_wykladowca pw
+		NATURAL JOIN wykladowca w
+	WHERE
+		pw.przedmiot_id = przedmiot_id;
+END
+
+//****************************************************************************************************************
+
+QUERY 3.
+Procedura wyświetla dostępnych wykładowców dla danego przedmiotu.
+CREATE PROCEDURE `dostepni_wykladowcy_dla_przedmiotu`(IN `przedmiot_id` INT)
+BEGIN
+	SELECT 
+		* 
+	FROM 
+		wykladowca  w
+	WHERE
+		w.wykladowca_id NOT IN 
+		(
+			SELECT 
+				wykladowca_id
+			FROM
+				przedmiot_wykladowca pw
+			WHERE
+				pw.przedmiot_id = przedmiot_id
+		);
+END
+
+//****************************************************************************************************************
+
+QUERY 4.
+Procedura wyświetla dostępne kierunki na których przedmiot nie jest jeszcze realizowany, w zadanym semestrze.
+CREATE PROCEDURE `dostepne_realizowany_kierunki_dla_przedmiotu` (IN `przedmiot_id` INT, IN `semestr_id` INT)
+BEGIN
+	SELECT 
+		* 
+	FROM 
+		realizowany_kierunek  rk
+	WHERE
+		rk.realizowany_kierunek_id NOT IN 
+		(
+			SELECT 
+				realizowany_kierunek_id
+			FROM
+				przedmiot_realizowany_kierunek prk
+			WHERE
+				prk.przedmiot_id = przedmiot_id    
+			AND prk.semestr_id = semestr_id                
+		);
+END
+
+//****************************************************************************************************************
+
+QUERY 5.
+Procedura zwraca przedmioty które jest są realizowane na danym kierunku, w zadanym semestrze.
+CREATE PROCEDURE `dostepne_przedmioty_dla_realizowanego_kierunku` (IN `realizowany_kierunek_id` INT, IN `semestr_id` INT)
+BEGIN
+	SELECT 
+		* 
+	FROM 
+		przedmiot  p
+	WHERE
+		p.przedmiot_id NOT IN 
+		(
+			SELECT 
+				przedmiot_id
+			FROM
+				przedmiot_realizowany_kierunek prk
+			WHERE
+				prk.realizowany_kierunek_id = realizowany_kierunek_id  
+			AND prk.semestr_id = semestr_id                  
+		);
+END
+
+//****************************************************************************************************************
+
+QUERY 6.
+Procedura zwraca dostępne przedmioty dla danego wykładowcy.
+CREATE PROCEDURE `dostepne_przedmioty_dla_wykladowcy`(IN `wykladowca_id` INT)
+BEGIN
+	SELECT 
+		* 
+	FROM 
+		przedmiot  p
+	WHERE
+		p.przedmiot_id NOT IN 
+		(
+			SELECT 
+				przedmiot_id
+			FROM
+				przedmiot_wykladowca pw
+			WHERE
+				pw.wykladowca_id = wykladowca_id                
+		);
+END
+
+//****************************************************************************************************************
+
+TRIGGER 7.
+Trigger, który po dodaniu nowej grupy aktualizuje tabelę realizowane_przedmioty o nowe rekordy odpowiadające realizowanym przedmiotom na danym kierunku.
+CREATE  TRIGGER `grupa_after_insert` AFTER INSERT ON `grupa` FOR EACH ROW BEGIN
+	-- deklaracja zmiennych
+	DECLARE add_flag BOOLEAN DEFAULT false;
+	DECLARE przedmiot_realizowany_kierunek_id INT;
+	DECLARE wyklad INT;
+	DECLARE cwiczenia INT;
+	DECLARE labolatorium INT;
+	DECLARE projekt INT;
+	DECLARE seminarium INT;
+	   
+	-- deklaracja kursora
+	DECLARE przedmoty_do_realizacji_end INTEGER DEFAULT 0;
+	DECLARE przedmoty_do_realizacji CURSOR FOR 
+	(
+		SELECT 
+			prk.przedmiot_realizowany_kierunek_id,
+			prk.wyklad,
+			prk.cwiczenia,
+			prk.labolatoria,
+			prk.projekty,
+			prk.seminarium
+		FROM 
+			przedmiot_realizowany_kierunek prk 
+		WHERE 
+			prk.realizowany_kierunek_id = NEW.realizowany_kierunek_id 
+		AND prk.semestr_id = NEW.semestr_id
+	);
+	DECLARE CONTINUE HANDLER FOR NOT FOUND SET przedmoty_do_realizacji_end = 1;
+
+	-- trigger
+	OPEN przedmoty_do_realizacji;
+	
+	do_realizacji: LOOP
+		SET add_flag = false;
+		FETCH przedmoty_do_realizacji INTO przedmiot_realizowany_kierunek_id,
+		wyklad,cwiczenia,labolatorium,projekt,seminarium;
+		IF przedmoty_do_realizacji_end THEN LEAVE do_realizacji; END IF;
+		 
+		IF( NEW.typ = 0 AND wyklad > 0 ) THEN SET add_flag = true; END IF;
+		IF( NEW.typ = 1 AND cwiczenia > 0 ) THEN SET add_flag = true; END IF;
+		IF( NEW.typ = 2 AND labolatorium > 0 ) THEN SET add_flag = true; END IF;
+		IF( NEW.typ = 3 AND projekt > 0 ) THEN SET add_flag = true; END IF;
+		IF( NEW.typ = 4 AND seminarium > 0 ) THEN SET add_flag = true; END IF;
+
+		IF ( add_flag ) THEN
+			INSERT INTO
+				realizowany_przedmiot (`przedmiot_realizowany_kierunek_id`,`grupa_id`)
+			VALUES
+				(przedmiot_realizowany_kierunek_id,NEW.grupa_id);  
+		END IF;
+	END LOOP do_realizacji;
+	
+	CLOSE przedmoty_do_realizacji;
+END
+
+//****************************************************************************************************************
+
+TRIGGER 8.
+Trigger, który po związaniu przedmiotu z realizowanym kierunkiem uaktualni tabele realizowane_przedmioty o nowe rekordy odpowiadające realizowanym przedmiotom na danym kierunku.
+CREATE TRIGGER `przedmiot_realizowany_kierunek_after_insert`
+ AFTER INSERT ON `przedmiot_realizowany_kierunek` FOR EACH ROW BEGIN
+	-- deklaracja zmiennych
+	DECLARE add_flag BOOLEAN DEFAULT false;
+	DECLARE grupa_id INT;
+	DECLARE typ INT;
+	
+	-- deklaracja kursora
+	DECLARE przedmoty_do_realizacji_end INTEGER DEFAULT 0;
+	DECLARE przedmoty_do_realizacji CURSOR FOR 
+	(
+		SELECT 
+			g.grupa_id,
+			g.typ
+		FROM
+			grupa g
+		WHERE 
+			g.realizowany_kierunek_id = NEW.realizowany_kierunek_id  
+		AND g.semestr_id = NEW.semestr_id            
+	);
+	DECLARE CONTINUE HANDLER FOR NOT FOUND SET przedmoty_do_realizacji_end = 1;
+
+	-- trigger
+	OPEN przedmoty_do_realizacji;
+	
+	do_realizacji: LOOP
+		SET add_flag = false;
+		FETCH przedmoty_do_realizacji INTO grupa_id,typ;
+		 IF przedmoty_do_realizacji_end THEN LEAVE do_realizacji; END IF;
+		IF( typ = 0 AND NEW.wyklad > 0 ) THEN SET add_flag = true; END IF;
+		IF( typ = 1 AND NEW.cwiczenia > 0 ) THEN SET add_flag = true; END IF;
+		IF( typ = 2 AND NEW.labolatoria > 0 ) THEN SET add_flag = true; END IF;
+		IF( typ = 3 AND NEW.projekty > 0 ) THEN SET add_flag = true; END IF;
+		IF( typ = 4 AND NEW.seminarium > 0 ) THEN SET add_flag = true; END IF;
+		
+		IF ( add_flag ) THEN
+			INSERT INTO
+				realizowany_przedmiot (`przedmiot_realizowany_kierunek_id`,`grupa_id`)
+			VALUES
+				(NEW.przedmiot_realizowany_kierunek_id,grupa_id);  
+		END IF;
+	END LOOP do_realizacji;
+	
+	CLOSE przedmoty_do_realizacji;
+END
+
+//****************************************************************************************************************
+
+TRIGGER 9.
+Trigger, który monitoruje zmiany w tabeli przedmiot_realizowany_kierunek i aktualizuje odpowiadające krotki w realizowany_przedmiot.
+CREATE TRIGGER `przedmiot_realizowany_kierunek_after_update` 
+AFTER UPDATE ON `przedmiot_realizowany_kierunek` FOR EACH ROW BEGIN
+	-- deklaracja zmiennych
+	DECLARE add_flag BOOLEAN DEFAULT false;
+	DECLARE remove_flag BOOLEAN DEFAULT false;
+	DECLARE grupa_id INT;
+	DECLARE typ INT;
+	
+	-- deklaracja kursora
+	DECLARE przedmoty_do_realizacji_end INTEGER DEFAULT 0;
+	DECLARE przedmoty_do_realizacji CURSOR FOR 
+	(
+		SELECT 
+			g.grupa_id,
+			g.typ
+		FROM
+			grupa g
+		WHERE 
+			g.realizowany_kierunek_id = NEW.realizowany_kierunek_id  
+		AND g.semestr_id = NEW.semestr_id
+	);
+	DECLARE CONTINUE HANDLER FOR NOT FOUND SET przedmoty_do_realizacji_end = 1;
+
+	-- trigger
+	OPEN przedmoty_do_realizacji;
+	do_realizacji: LOOP
+		SET add_flag = false;
+		SET remove_flag = false;
+		FETCH przedmoty_do_realizacji INTO grupa_id,typ;
+		
+		IF przedmoty_do_realizacji_end THEN LEAVE do_realizacji; END IF;
+		
+		CASE typ
+			WHEN 0 THEN BEGIN
+				IF NEW.wyklad <> OLD.wyklad THEN
+					IF (NEW.wyklad = 0) THEN SET remove_flag=true; END IF;
+					IF (OLD.wyklad = 0) THEN SET add_flag=true; END IF;
+				END IF;
+			END;
+			
+			WHEN 1 THEN BEGIN
+				IF NEW.cwiczenia <> OLD.cwiczenia THEN
+					IF NEW.cwiczenia = 0 THEN SET remove_flag=true; END IF;
+					IF OLD.cwiczenia = 0 THEN SET add_flag=true; END IF;
+				END IF;
+			END;
+			
+			WHEN 2 THEN BEGIN
+				IF NEW.labolatoria <> OLD.labolatoria THEN
+					IF NEW.labolatoria = 0 THEN SET remove_flag=true; END IF;
+					IF OLD.labolatoria = 0 THEN SET add_flag=true; END IF;
+				END IF;
+			END;
+			
+			WHEN 3 THEN BEGIN
+				IF NEW.projekty <> OLD.projekty THEN
+					IF NEW.projekty = 0 THEN SET remove_flag=true; END IF;
+					IF OLD.projekty = 0 THEN SET add_flag=true; END IF;
+				END IF;
+			END;
+				 
+			WHEN 4 THEN BEGIN
+				IF NEW.seminarium <> OLD.seminarium THEN
+					IF NEW.seminarium = 0 THEN SET remove_flag=true; END IF;
+					IF OLD.seminarium = 0 THEN SET add_flag=true; END IF;
+				END IF;
+			END;
+			
+		END CASE;
+	   
+		IF ( add_flag ) THEN
+			INSERT INTO
+				realizowany_przedmiot (`przedmiot_realizowany_kierunek_id`,`grupa_id`)
+			VALUES
+				(NEW.przedmiot_realizowany_kierunek_id,grupa_id);  
+		END IF;
+		
+		IF ( remove_flag ) THEN
+			DELETE FROM realizowany_przedmiot WHERE
+			 przedmiot_realizowany_kierunek_id=NEW.przedmiot_realizowany_kierunek_id 
+			AND grupa_id=grupa_id LIMIT 1; 
+		END IF;
+	END LOOP do_realizacji;
+	
+	CLOSE przedmoty_do_realizacji;
+END
+
+//****************************************************************************************************************
+
+TRIGGER 10.
+Trigger, realizowany_przedmiot_before_update, który sprawdza czy wykładowca przypisany do przedmiotu posiada predyspozycje do jego prowadzenia.
+CREATE TRIGGER `realizowany_przedmiot_before_update` 
+BEFORE UPDATE ON `realizowany_przedmiot` FOR EACH ROW BEGIN
+	DECLARE przedmiot_idt INT;
+	IF( NEW.wykladowca_id IS NOT NULL) THEN
+		SET przedmiot_idt = ( 
+		SELECT przedmiot_id
+		 FROM 
+		 przedmiot_realizowany_kierunek 
+		 WHERE 
+		 przedmiot_realizowany_kierunek_id = NEW.przedmiot_realizowany_kierunek_id
+		 );
+		
+		IF ( (
+		SELECT przedmiot_wykladowca_id 
+		FROM przedmiot_wykladowca 
+		WHERE wykladowca_id = NEW.wykladowca_id
+		 AND przedmiot_id = przedmiot_idt ) IS NULL ) THEN
+		   SIGNAL SQLSTATE '45000' 
+		   SET MESSAGE_TEXT = 'This teacher dont have authority to realize this class.';
+		END IF;
+	END IF;
+END
+
+//****************************************************************************************************************
+
+VIEW 11.
+Perspektywa, która pokazuje atrybuty z tabel znajdujących się w relacji realizowany\_przedmiot przedstawione jako jedna tabela.
+CREATE VIEW realizowany_przedmiot_view AS 
+SELECT 
+	rp.realizowany_przedmiot_id,
+	g.realizowany_kierunek_id,
+	g.grupa_id,
+	g.nazwa as 'grupa',
+	g.typ,
+	p.przedmiot_id,
+	p.nazwa as 'przedmiot',
+	p.kod,
+	prk.semestr_id,
+	prk.wyklad,
+	prk.cwiczenia,
+	prk.labolatoria,
+	prk.projekty,
+	prk.seminarium,
+	prk.etcs,
+	w.wykladowca_id,
+	w.imie,
+	w.nazwisko,
+	w.stopien
+FROM
+	realizowany_przedmiot rp
+	NATURAL JOIN grupa g
+	NATURAL LEFT JOIN wykladowca w
+	NATURAL JOIN przedmiot_realizowany_kierunek prk
+	JOIN  przedmiot p ON p.przedmiot_id = prk.przedmiot_id 
+
+//****************************************************************************************************************
+
+VIEW 12.
+Perspektywa realizowany_kierunek_view, która pokazuje atrybuty z tabel realizowany_kierunek i semestr.
+CREATE VIEW realizowany_kierunek_view AS 
+SELECT 
+	rk.realizowany_kierunek_id,
+	rk.nazwa,
+	rk.rok_rozpoczecia,
+	tk.nazwa as `tok_studiow`,
+	tk.kod,
+	tk.tryb,
+	tk.profil_akademicki,
+	tk.semestry,
+	tk.stopien
+FROM
+	realizowany_kierunek rk
+	LEFT JOIN tok_studiow tk USING (tok_studiow_id) 
+
+//****************************************************************************************************************
+
+VIEW 13.
+Perspektywa grupy_w_semestrze która pokazuje wszystkie grupy w danym semestrze.
+CREATE VIEW grupy_w_semestrze 
+AS
+SELECT 
+	*
+FROM
+	grupa
+WHERE
+	semestr_id=16;
+
+//****************************************************************************************************************
+
+QUERY 14.
+Zapytanie zwraca przedmioty bez przypisanych wykładowców.
+SELECT
+	*
+FROM
+	realizowany_przedmiot_view 
+WHERE
+	wykladowca_id IS NULL
+
+//****************************************************************************************************************
+
+QUERY 15.
+Zapytanie które zwraca liczbę studentów dla podanego semestru.
+W zadaniu trzeba przyjąć założenie: każdy kierunek posiada tylko jedną grupę wykładową. Tym samym zadanie sprowadza się do znalezienia sumy.
+SELECT
+	sum(ilosc) as 'liczba studentow'
+FROM
+	grupa
+ WHERE
+	semestr_id = 12
+AND typ = 0
+GROUP BY
+	typ;
+
+//****************************************************************************************************************
+
+QUERY 16.
+Kwerenda zwracająca realizowane kierunki w danym semestrze akademickim
+SELECT
+	*
+FROM
+	realizowany_kierunek rk
+WHERE
+	rk.realizowany_kierunek_id IN
+	(
+		SELECT
+			g.realizowany_kierunek_id 
+		FROM
+			grupa g
+		WHERE
+			g.realizowany_kierunek_id = rk.realizowany_kierunek_id
+		AND g.semestr_id = 13
+	)
+
+//****************************************************************************************************************
+
+QUERY 17.
+Kwerenda zwracająca wszystkie grupy dla kierunku w danym semestrze.
+SELECT
+	*
+FROM
+	grupa
+WHERE 
+	realizowany_kierunek_id = 25
+AND semestr_id = 15
+
+//****************************************************************************************************************
+
+QUERY 18.
+Zapytanie zwracające liczbę studentów na każdym z semestrów 
+SELECT
+	g.semestr_id,
+	sum(ilosc) as 'liczba studentow'
+FROM
+	grupa g
+	NATURAL JOIN semestr s
+WHERE
+	g.typ = 0
+AND g.realizowany_kierunek_id = 25
+GROUP BY
+	semestr_id
+
+//****************************************************************************************************************
+
+QUERY 19.
+Zwróć wszystkie ćwiczenia których prowadzący nie prowadzi wykładów z tego przedmiotu.
+SELECT
+	*
+FROM
+	realizowany_przedmiot_view rpv
+WHERE
+	rpv.typ = 1
+AND rpv.wykladowca_id NOT IN
+(
+	SELECT
+		rpv1.wykladowca_id
+	FROM
+		realizowany_przedmiot_view rpv1
+	WHERE
+		rpv1.typ = 0
+	AND rpv1.przedmiot_realizowany_kierunek_id =
+		rpv.przedmiot_realizowany_kierunek_id     
+);
+
+//****************************************************************************************************************
+
+QUERY 20.
+Wybierz wszystkie przedmioty z kategorii: `Przedmioty pozatechniczne, ogólne`.
+SELECT 
+	*
+FROM
+	przedmiot
+WHERE
+	kategoria_id = 1;

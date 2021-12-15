@@ -1,0 +1,141 @@
+﻿QUERY 1.
+Zapytanie zwraca wszystkie pozycje z zlecenia, tworząc podsumowanie. Swego rodzaju faktura.
+(
+SELECT
+	zu.zlecenie_usluga_id,
+	u.nazwa,
+	zu.start,
+	zu.koniec,
+	zu.ilosc,
+	u.cena,
+	(zu.ilosc * u.cena) as "suma"
+FROM
+	zlecenie_usluga zu
+	NATURAL JOIN zlecenie z
+	NATURAL JOIN usluga u
+WHERE
+	zu.zlecenie_id = 1
+)
+UNION
+(
+SELECT
+	null,
+	'PODSUMOWANIE:',
+	null,
+	null,
+	(
+	SELECT 
+		SUM(ilosc) 
+	FROM 
+		zlecenie_usluga 
+	WHERE 
+		zlecenie_id = 1
+	),
+	null,	
+	(
+		SELECT
+			SUM(zu.ilosc*u.cena)
+		FROM
+			zlecenie_usluga zu
+			NATURAL JOIN usluga u
+		WHERE
+			zu.zlecenie_id = 1
+	)
+) ORDER BY start;
+
+//****************************************************************************************************************
+
+QUERY 2.
+Kwerenda pokazuje wszystkie zaległe zapłaty ( które powinny zostać opłacone do dnia dzisiejszego) w kolejności od najstarszej.
+SELECT
+	k.imie,
+	k.nazwisko,
+	f.nazwa,
+	k.telefon,
+	k.email,
+	z.termin,
+	TRUNC(DATE_PART('day', now() - z.termin)/7)  as "tygodni po terminie",
+	DATE_PART('day', now() - z.termin) as "dni po terminie",
+	z.wartosc
+FROM
+	zaplata z
+	NATURAL JOIN zlecenie_usluga zu
+	NATURAL JOIN zlecenie zl
+	NATURAL JOIN klient k
+	LEFT JOIN firma f ON f.firma_id = k.firma_id
+WHERE
+	z.status IS FALSE 
+AND	z.termin < now()
+ORDER BY 
+	"dni po terminie" DESC
+
+//****************************************************************************************************************
+
+QUERY 3.
+Zwraca listę outsorsingu do monitorowania, czy nasi kontrahenci wywiązują się z umów, tym samym nie powodując opóźnień w zleceniach.
+SELECT
+	u.nazwa,
+	zu.ilosc,
+	f.nazwa,
+	k.ilosc,
+	f.telefon,
+	f.nazwa,
+	zu.koniec
+FROM
+	zlecenie_usluga zu
+	NATURAL JOIN usluga u
+	LEFT JOIN kontrahent k ON k.kontrahent_id = zu.kontrahent_id
+	LEFT JOIN firma f ON f.firma_id = k.firma_id
+WHERE
+	zu.koniec > now()
+AND	zu.kontrahent_id IS NOT NULL;
+
+//****************************************************************************************************************
+
+QUERY 4.
+Tabela liczy zysk netto z usług oferowanych przez agencje. Średnia cena jest średnią z wszystkich cen wynegocjowanych z naszymi kontrahentami.
+SELECT
+	u.usluga_id,
+	u.nazwa,
+	u.cena,
+	round(AVG(k.cena), 2) as "srednia cena",
+	round(u.cena - COALESCE(AVG(k.cena),0),2) as "zysk netto"
+FROM
+	zlecenie_usluga zu
+	NATURAL JOIN usluga u
+	LEFT JOIN kontrahent k USING(kontrahent_id)
+GROUP BY
+	u.usluga_id,
+	u.nazwa,
+	u.cena;
+
+//****************************************************************************************************************
+
+QUERY 5.
+Zwraca dane kontaktowe klientów z przystępnym formatowaniem do przeglądania.
+SELECT
+	z.zlecenie_id,
+	k.telefon,
+	(SELECT SUM(wartosc) FROM zaplata WHERE zlecenie_usluga_id IN (SELECT zlecenie_usluga_id FROM zlecenie_usluga WHERE zlecenie_id = z.zlecenie_id)),
+	k.imie || ' ' || k.nazwisko as "Klient",
+	k.imie || ' ' || k.nazwisko || E'\n' || a.ulica || ' ' || a.budynek || E'\n' || a.kod_pocztowy || ' ' || a.miejscowosc as "Adres",
+	CASE
+	 WHEN (k.firma_id IS NOT NULL) THEN 
+	(
+	 SELECT
+		f.nazwa ||  E'\n' || a.ulica || ' ' || a.budynek || E'\n' || a.kod_pocztowy || ' ' || a.miejscowosc
+	 FROM
+		firma f
+		NATURAL JOIN adres a
+	 WHERE	
+		f.firma_id = k.firma_id
+	)
+	 ELSE 
+		NULL
+	END as "Adres firmy",
+	p.imie || ' ' || p.nazwisko as "Opiekun"
+FROM
+	zlecenie z
+	NATURAL JOIN klient k
+	LEFT JOIN pracownik p USING (pracownik_id)
+	LEFT JOIN adres a ON a.adres_id = k.adres_id;

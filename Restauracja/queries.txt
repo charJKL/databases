@@ -1,0 +1,158 @@
+﻿QUERY 1.
+Bilans_menu() - zwraca listę pozycji z menu, których nikt nigdy nie zamówił - czyli przynoszą straty.
+CREATE OR REPLACE FUNCTION bilans_menu()
+  RETURNS SETOF menu AS
+$BODY$BEGIN
+	RETURN QUERY 
+	SELECT 
+		* 
+	FROM 
+		menu m
+	WHERE 
+		NOT EXISTS 
+		(
+			SELECT 
+				zamowienie_menu_id
+			FROM
+				zamowienie_menu
+			WHERE
+				menu_id = m.menu_id	
+		);
+END$BODY$
+  LANGUAGE plpgsql VOLATILE
+  COST 100
+  ROWS 1000;
+ALTER FUNCTION bilans_menu()
+  OWNER TO postgres;
+
+
+//****************************************************************************************************************
+
+QUERY 2.
+Czy_sa_skladniki(<int>) - sprawdza czy są składniki do przygotowania dania o podanym id.
+CREATE OR REPLACE FUNCTION czy_sa_skladniki(pozycja_z_menu integer DEFAULT 0)
+  RETURNS SETOF czy_sa_skladniki AS
+$BODY$DECLARE
+	row czy_sa_skladniki;
+	nazwa text;
+	jest numeric;
+	potrzeba numeric;
+BEGIN
+	FOR
+		potrzeba,
+		jest,
+		nazwa
+	IN SELECT
+		ms.ilosc,
+		s.magazyn,
+		s.nazwa
+	FROM
+		menu_skladnik ms
+		LEFT JOIN skladnik s ON s.skladnik_id = ms.skladnik_id
+	WHERE 
+		ms.menu_id = pozycja_z_menu
+	LOOP
+		row.skladnik := nazwa;
+		row.jest := jest;
+		row.potrzeba := potrzeba;
+		row.wystarczajaco := 'NIE';
+
+		IF row.jest > row.potrzeba THEN 
+			row.wystarczajaco := 'TAK' ;
+		END IF;
+
+		return next row;
+	END LOOP;
+END$BODY$
+  LANGUAGE plpgsql VOLATILE
+  COST 100
+  ROWS 1000;
+ALTER FUNCTION czy_sa_skladniki(integer)
+  OWNER TO postgres;
+
+//****************************************************************************************************************
+
+QUERY 3.
+Raport_z_dnia('2016-03-11') - zwraca bilans z dnia.
+CREATE OR REPLACE FUNCTION raport_z_dnia(dzien date DEFAULT ('now'::text)::date)
+  RETURNS SETOF raport_z_dnia_row AS
+$BODY$DECLARE
+	oneRow raport_z_dnia_row;
+	nazwa text;
+	ile int;
+	suma numeric;
+	daySuma numeric;
+	dayIle int;
+BEGIN
+	daySuma = 0;
+	dayIle = 0;
+	FOR 
+		nazwa,
+		ile,
+		suma
+	IN SELECT 	
+		m.nazwa,
+		COUNT(*),
+		SUM(m.cena)
+	FROM
+		zamowienie z 
+		LEFT JOIN zamowienie_menu zm ON zm.zamowienie_id = z.zamowienie_id
+		LEFT JOIN menu m ON m.menu_id = zm.menu_id
+	WHERE 
+		dzien = date(z.wydano)
+	GROUP BY
+		m.menu_id
+	ORDER BY
+		SUM(m.cena) DESC
+	LOOP
+		oneRow.nazwa := nazwa;
+		oneRow.ile := ile;
+		oneRow.suma := suma;
+		dayIle = dayIle + ile;
+		daySuma = daySuma + suma;
+		return next oneRow; 
+	END LOOP;
+	
+	oneRow.nazwa := 'Zysk z całego dnia:';
+	oneRow.ile := dayIle;
+	oneRow.suma := daySuma;
+	return next oneRow; 
+
+END$BODY$
+  LANGUAGE plpgsql VOLATILE
+  COST 100
+  ROWS 1000;
+ALTER FUNCTION raport_z_dnia(date)
+  OWNER TO postgres;
+
+//****************************************************************************************************************
+
+QUERY 4.
+Sprawdz_magazyn() - zwraca listę skladnikow ktorych juz nie ma i trzeba zamówić.
+CREATE OR REPLACE FUNCTION sprawdz_magazyn()
+  RETURNS SETOF skladnik AS
+$BODY$BEGIN
+	RETURN QUERY SELECT * FROM skladnik WHERE magazyn = 0;
+END$BODY$
+  LANGUAGE plpgsql VOLATILE
+  COST 100
+  ROWS 1000;
+ALTER FUNCTION sprawdz_magazyn()
+  OWNER TO postgres;
+
+
+//****************************************************************************************************************
+
+QUERY 5.
+Podlicz zamówienie – funkcja, która podlicza koszt zamówienia.
+CREATE OR REPLACE FUNCTION podlicz_zamowienie_dodano()
+  RETURNS trigger AS
+$BODY$BEGIN
+UPDATE 
+	zamowienie
+SET
+	suma = suma + (SELECT cena FROM menu WHERE menu_id = NEW.menu_id)
+WHERE
+	zamowienie_id = NEW.zamowienie_id;
+RETURN NEW;
+END$BODY$
